@@ -2,6 +2,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <math.h>
+#include <time.h>
 
 struct thread_params{
   int total_iterations;
@@ -85,7 +86,6 @@ double generate_stay_time(double gauss_mean, double std_dev){ //Generate using A
     if( u < ( (c * exp(-1 * pow(u2 - gauss_mean , 2) / 2*pow(std_dev, 2) )) / (M * exp(-1 * u2))) ){
       return u2;
     }
-    // printf("Reject, trying again\n");
   }
 }
 
@@ -100,9 +100,9 @@ void foo(void* param){
 
     double next_car_time= get_next_car(1/p->exp_mean); //1/exp mean is lambda
     
-    int s = rand() % (p->TOTAL_SPOTS+1);
-
+    int s = rand() % (p->TOTAL_SPOTS+1); //So all threads don't start checking at 0.
     int parked = 0; //Reset this flag for every new car
+
     for (int j = 0; j < p->TOTAL_SPOTS; j++){  
       s = (s + j) % p->TOTAL_SPOTS;
 
@@ -127,9 +127,9 @@ void foo(void* param){
   pthread_exit(NULL);
 }
 
-int main(int argc, char **argv)
-{
-  time_t start = time(NULL);
+int main(int argc, char **argv){
+  struct timespec begin;
+  clock_gettime(CLOCK_MONOTONIC, &begin);
   init_sequence(1000); //Setting lag table
 
   if(argc != 4 && argc !=5){
@@ -177,31 +177,31 @@ int main(int argc, char **argv)
     }
   }
 
-  if(1){
-    int n;
-    scanf("%d", &n);
-  }
-
   //WAIT UNTIL AFTER ALL OTHER THREADS ARE DONE
   for (int i = 0; i < params.TOTAL_THREADS; i++){
     printf("Waiting to join %d\n",i);
     int ret = pthread_join(thread[i], NULL);
-    if(ret != 0)
-      printf("%d : Error %d\n",i ,ret);
+    if(ret != 0){
+      printf("%d : Error on Join. Exiting Program. %d\n",i ,ret);
+      pthread_exit(NULL);
+    }
     else
-     printf("%d : Success\n" ,ret);
+     printf("%d : Successfully Joined\n" ,ret);
   } 
 
 
   double missed_car_prob = (double)missed_cars / MAX_ITERATIONS;
   double average_open_spots = (double)open_spots / MAX_ITERATIONS; 
 
-  printf("A %f chance of a car not parking\n", missed_car_prob*100);
-  printf("An average of %f open spot\n" , average_open_spots);
+  printf("A %f %% chance of a car not parking\n", missed_car_prob*100);
+  printf("An average of %f open spots\n" , average_open_spots);
 
-  time_t stop = time(NULL);
-  time_t total_time = stop - start;
-  printf("Total Time %ld second(s) \n", total_time);
+  struct timespec end;
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  double total_time = end.tv_sec - begin.tv_sec;
+  total_time += (end.tv_nsec - begin.tv_nsec) / 1000000000.0;
+
+  printf("Total Time %f second(s) \n", total_time);
 
   pthread_exit(NULL);
 }
