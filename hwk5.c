@@ -23,17 +23,28 @@ void finalize ( char * state ){
 }
 
 //Global Variables
-//1 lock per spot
-int MAX_ITERATIONS = 1000000;
+int MAX_ITERATIONS = 10000; //Iteration limit before terminating calculations
+pthread_mutex_t iteration_lock;
+int iterations_executed = 0; //Actual number of iterations performed
+
+pthread_t* thread; //An array of thread ids
 double *spot; //An array of all spots
 pthread_mutex_t *lock; //An array of mutexes for each spot
-pthread_t* thread; //An array of thread ids
-int open_spots = 0;
+
+int open_spots = 0; //Total available spots during the entire runtime of program
 pthread_mutex_t lock_open; //Mutex to change open_spots
-int missed_cars = 0;
+
+int missed_cars = 0;  //Total times a car couldn't par
 pthread_mutex_t lock_missed;  //Mutex to change missed_cars
-int next_car = 0;
+
+int next_car = 0; //The time of the next arriving car
 pthread_mutex_t lock_next_car;
+
+void increment_iterations(int i){
+  pthread_mutex_lock(&iteration_lock);
+  iterations_executed += i;
+  pthread_mutex_unlock(&iteration_lock);
+}
 
 void increment_open_spots(int i){
   pthread_mutex_lock(&lock_open);
@@ -89,39 +100,46 @@ double generate_stay_time(double gauss_mean, double std_dev){ //Generate using A
   }
 }
 
-void foo(void* param){
+void thread_main(void* param){
   int local_missed_cars = 0;
   int local_open_spots = 0;
-  pthread_t id = pthread_self();
   struct thread_params* p = (struct thread_params*)param; 
 
-  for(int i=0; i< p->total_iterations; i++){
-    // printf("%d\n",i);
+  for(int i=1; i< p->total_iterations; i++){ 
+    double next_car_time = 0; //The time of next arriving car
+    int parked = 0; //Let 0 mean the car has not yet parked
 
-    double next_car_time= get_next_car(1/p->exp_mean); //1/exp mean is lambda
-    
-    int s = rand() % (p->TOTAL_SPOTS+1); //So all threads don't start checking at 0.
-    int parked = 0; //Reset this flag for every new car
-
-    for (int j = 0; j < p->TOTAL_SPOTS; j++){  
-      s = (s + j) % p->TOTAL_SPOTS;
-
-      if (spot[j] < next_car_time){//If the spot is available
-        local_open_spots++;
-        if( parked == 0 ){ //parked is false
-          parked = 1;
-          spot[j] = next_car_time+ generate_stay_time(p->gauss_mean, p->gauss_mean/4);
-        }
+    //Insert car into first slot to prevent racecondition
+    pthread_mutex_lock(&lock[0]);
+    next_car_time = get_next_car(1/p->exp_mean);
+    if (spot[0] < next_car_time){ //If the spot is available
+      local_open_spots++;
+      if( parked == 0 ){ 
+        parked = 1;
+        //Updating the next available time the spot is free
+        spot[0] = next_car_time + generate_stay_time(p->gauss_mean, p->gauss_mean/4);
       }
     }
+    pthread_mutex_unlock(&lock[0]);
 
-    // If you still haven't parked aka parked == 0 after checking each spot
-    if(parked == 0){
-      local_missed_cars++;
+    for (int j = 1; j < p->TOTAL_SPOTS; j++){  
+      pthread_mutex_lock(&lock[j]);
+      if (spot[j] < next_car_time){ //If the spot is available
+        local_open_spots++;
+        if( parked == 0 ){ 
+          parked = 1;
+          spot[j] = next_car_time + generate_stay_time(p->gauss_mean, p->gauss_mean/4);
+        }
+      }
+      pthread_mutex_unlock(&lock[j]);
     }
+    // If you still haven't parked aka parked == 0 after checking each spot
+    if(parked == 0)
+      local_missed_cars++;
   }
 
   //Update the global variables with these local thread variables
+  increment_iterations(p->total_iterations);
   increment_open_spots(local_open_spots);
   increment_missed_cars(local_missed_cars);
   pthread_exit(NULL);
@@ -130,76 +148,85 @@ void foo(void* param){
 int main(int argc, char **argv){
   struct timespec begin;
   clock_gettime(CLOCK_MONOTONIC, &begin);
-  init_sequence(1000); //Setting lag table
+  init_sequence(100); //Setting lag table
+
 
   if(argc != 4 && argc !=5){
     printf("Please enter all your variables man!\n");
-    return 0;
+    pthread_exit(NULL);
   }
 
   //Initializing params that all thread will execute upon
-  struct thread_params params;
+    struct thread_params params;
     params.TOTAL_SPOTS = atoi(argv[1]);
+    if(params.TOTAL_SPOTS < 0){
+      printf("Please enter a non-negative amount of spots.\n");
+      pthread_exit(NULL);
+    }
     if(argc == 4)
       params.TOTAL_THREADS = 4;
     else
-      params.TOTAL_THREADS = atoi(argv[4]);
-    params.total_iterations = MAX_ITERATIONS/params.TOTAL_THREADS + 1;
-    params.exp_mean = atof(argv[2]);
-    params.gauss_mean = atof(argv[3]);
+      params.TOTAL_THREADS = atoi(argv[4]);//Check for not 0 threads
+    if(atof(argv[2]) > 0 || atof(argv[3]) > 0){
+      params.exp_mean = atof(argv[2]);
+      params.gauss_mean = atof(argv[3]);
+    }
+    else{
+      printf("Please enter valid mean values.\n");
+      pthread_exit(NULL); 
+    }
+    params.total_iterations = MAX_ITERATIONS/params.TOTAL_THREADS;
 
 
   //Initializing mutex locks needed to update global vars
-  pthread_mutex_init(&lock_open, NULL);
-  pthread_mutex_init(&lock_missed, NULL);
-  pthread_mutex_init(&lock_next_car , NULL);
+    pthread_mutex_init(&lock_open, NULL);
+    pthread_mutex_init(&lock_missed, NULL);
+    pthread_mutex_init(&lock_next_car , NULL);
+    pthread_mutex_init(&iteration_lock, NULL);
 
   //initiate spots with time 0.
-  spot = (double *)malloc(sizeof(double) * params.TOTAL_SPOTS);
-  for (int i = 0; i < params.TOTAL_SPOTS; i++){
-    spot[i] = 0.0;
-  }
+    spot = (double *)malloc(sizeof(double) * params.TOTAL_SPOTS);
+    for (int i = 0; i < params.TOTAL_SPOTS; i++){
+      spot[i] = 0.0;
+    }
 
-  //init array of mutex per spot;
-  lock = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t)*params.TOTAL_SPOTS);
-  for(int i=0; i<params.TOTAL_SPOTS; i++){
-    pthread_mutex_init(&lock[i], NULL);
-  }
-
+  //Init array of mutex per spot;
+    lock = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t)*params.TOTAL_SPOTS);
+    for(int i=0; i<params.TOTAL_SPOTS; i++){
+      pthread_mutex_init(&lock[i], NULL);
+    }
 
   //Creating all threads
-  thread = (pthread_t*)malloc(sizeof(pthread_t) * params.TOTAL_THREADS);
-  for(int i=0; i<params.TOTAL_THREADS; i++){
-    int ret = pthread_create(&thread[i], NULL, (void*)foo, (void*)&params);
-    if( ret != 0){
-      printf("Error when creating thread. Exiting\n");
-      pthread_exit(NULL);
+    thread = (pthread_t*)malloc(sizeof(pthread_t) * params.TOTAL_THREADS);
+    for(int i=0; i<params.TOTAL_THREADS; i++){
+      int ret = pthread_create(&thread[i], NULL, (void*)thread_main, (void*)&params);
+      if( ret != 0){
+        printf("Error when creating thread. Exiting\n");
+        pthread_exit(NULL);
+      }
     }
-  }
 
-  //WAIT UNTIL AFTER ALL OTHER THREADS ARE DONE
-  for (int i = 0; i < params.TOTAL_THREADS; i++){
-    printf("Waiting to join %d\n",i);
-    int ret = pthread_join(thread[i], NULL);
-    if(ret != 0){
-      printf("%d : Error on Join. Exiting Program. %d\n",i ,ret);
-      pthread_exit(NULL);
-    }
-    else
-     printf("%d : Successfully Joined\n" ,ret);
-  } 
+  //Wait for all threads
+    for (int i = 0; i < params.TOTAL_THREADS; i++){
+      int ret = pthread_join(thread[i], NULL);
+      if(ret != 0){
+        printf("%d : Error on Join. Exiting Program. %d\n",i ,ret);
+        pthread_exit(NULL);
+      }
+    } 
 
 
-  double missed_car_prob = (double)missed_cars / MAX_ITERATIONS;
-  double average_open_spots = (double)open_spots / MAX_ITERATIONS; 
+  double missed_car_prob = (double)missed_cars / iterations_executed;
+  double average_open_spots = (double)open_spots / iterations_executed; 
 
+  printf(" A total of %d iterations\n", iterations_executed);
   printf("A %f %% chance of a car not parking\n", missed_car_prob*100);
   printf("An average of %f open spots\n" , average_open_spots);
 
   struct timespec end;
   clock_gettime(CLOCK_MONOTONIC, &end);
   double total_time = end.tv_sec - begin.tv_sec;
-  total_time += (end.tv_nsec - begin.tv_nsec) / 1000000000.0;
+  total_time += (end.tv_nsec - begin.tv_nsec) / 1000000000.0; //Divide by 10^9
 
   printf("Total Time %f second(s) \n", total_time);
 

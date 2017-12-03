@@ -28,19 +28,21 @@ int main(){
     pthread_mutex_init(&lock, NULL);
     pthread_mutex_lock(&lock);
 
-    pthread_t t0,t1;
+    pthread_t t0,t1,t2;
     int n0 = 0;
     int n1 = 1;
+    int n2 = 2;
     pthread_create(&t0, NULL, foo, (void*)&n0);
-    // for(int i = 0; i<100000; i++){}
+    for(int i = 0; i<100000; i++){}
     pthread_create(&t1, NULL, foo, (void*)&n1);
+    for(int i = 0; i<100000; i++){}
+    pthread_create(&t2, NULL, foo, (void*)&n2);
     //Create thread
 
-    int n = 1;
-    while( n != 0){
-        printf("hm.\n");
-        scanf("%d", &n);
-    }
+    // int n = 1;
+    // while( n != 0){
+    //     scanf("%d", &n);
+    // }
 
     pthread_mutex_unlock(&lock);
 
