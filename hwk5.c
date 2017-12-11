@@ -135,9 +135,11 @@ void thread_main(void* param){
 
     //Check convergence every 1 million iterations
     if(i % 1000000 == 0){
-
-      double prev_open_spots_average = open_spots/iterations_executed;
-      double prev_missed_cars_average = missed_cars/iterations_executed;
+      double prev_open_spots_average = 0;
+      double prev_missed_cars_average = 0;
+      if(iterations_executed != 0){
+        prev_open_spots_average = open_spots/iterations_executed;
+        prev_missed_cars_average = missed_cars/iterations_executed;
 
       pthread_barrier_wait(&barrier_a);
 
