@@ -1,3 +1,20 @@
+/***
+Title : hwk5.c
+Author : Jack Chen
+Submitted on : Dec 11, 2017
+
+Description : 
+  Simulates the Parking Garage Problem (using pthreads). The program is given
+  an exponential and normal distribution mean, and will compute the chance 
+  that a car cannot park, and the average amount of open spots.
+
+Usage : ./hwk5 [total_spots] [exp mean] [gauss mean] [thread_count]
+  *** thread_count is optional ***
+
+Build with : gcc hwk5.c -o hwk5 -lpthread -lm
+
+***/
+
 #include <stdio.h>
 #include <pthread.h>
 #include <stdlib.h>
@@ -12,6 +29,7 @@ struct thread_params{
   int TOTAL_THREADS;
   pthread_t main_thread;
 };
+
 char * init_sequence ( int state_size ){
   char * state ;
   state = ( char *) malloc ( state_size * sizeof ( char ) ) ;
@@ -19,25 +37,22 @@ char * init_sequence ( int state_size ){
     initstate ( time ( NULL ) , state , state_size ) ;
     return state ;
 }
-void finalize ( char * state ){
-  free ( state ) ;
-}
 
 //Global Variables
 int MAX_ITERATIONS = 1000000;
-double error_bound = 0.1;
+double error_bound = 0.001;
 
-pthread_mutex_t iteration_lock;
 int iterations_executed = 0; //Actual number of iterations performed
+pthread_mutex_t iterations_lock; //Mutex to change iterations_executed
 
 pthread_t* thread; //An array of thread ids
 double *spot; //An array of all spots
 pthread_mutex_t *lock; //An array of mutexes for each spot
 
-int open_spots = 0; //Total available spots during the entire runtime of program
+int open_spots = 0; //Available spots during the entire runtime of program
 pthread_mutex_t lock_open; //Mutex to change open_spots
 
-int missed_cars = 0;  //Total times a car couldn't par
+int missed_cars = 0;  //Total times a car couldn't park during entire runtime
 pthread_mutex_t lock_missed;  //Mutex to change missed_cars
 
 int next_car = 0; //The time of the next arriving car
@@ -64,20 +79,19 @@ void increment_missed_cars(int i){
   pthread_mutex_unlock(&lock_missed);
 }
 
-//Generated using Inverse Transform (Exponential)
+//Generated using Inverse Transform (Exponential Dist.)
 double get_next_car(double lambda){ 
-  pthread_mutex_lock(&lock_next_car);
   
-  double time = next_car;        //Retrieve the time of the next car
+  //Retrieve the time of the next car
+  double time = next_car;        
     double u = (double)(random())/RAND_MAX;
     double interval = -log(u) / lambda;
     next_car += interval;
   
-  pthread_mutex_unlock(&lock_next_car);
   return time;
 }
 
-//Generate using Acceptance/Rejection (Normal)
+//Generate using Acceptance/Rejection (Normal Dist.)
 double generate_stay_time(double gauss_mean, double std_dev){ 
   double c =  1 / sqrt(2*M_PI * pow(std_dev,2)) ;
   double M = c *  exp( -(pow(1-gauss_mean, 2) ) / (2*pow(std_dev,2)) + 1);
@@ -89,7 +103,8 @@ double generate_stay_time(double gauss_mean, double std_dev){
     double a = (double)(random())/RAND_MAX;
     u2 = -log(a); //Let lambda = 1
 
-    if( u <=  (c * exp(-1 * pow(u2 - gauss_mean , 2) / (2*pow(std_dev, 2)) )) / (M * exp(-u2)) ){
+    if( u <=  (c * exp(-1 * pow(u2 - gauss_mean , 2) / (2*pow(std_dev, 2)) )) 
+      / (M * exp(-u2)) ){
       return u2;
     }
   }
@@ -105,7 +120,7 @@ void thread_main(void* param){
     double next_car_time = 0; //The time of next arriving car
     int parked = 0; //Let 0 mean the car has not yet parked
 
-    //Insert car into first slot to prevent racecondition
+    //Insert car into first slot to prevent race condition
     pthread_mutex_lock(&lock[0]);
     next_car_time = get_next_car(1/p->exp_mean);
     if (spot[0] < next_car_time){ //If the spot is available
@@ -113,26 +128,27 @@ void thread_main(void* param){
       if( parked == 0 ){ 
         parked = 1;
         //Updating the next available time the spot is free
-        spot[0] = next_car_time + generate_stay_time(p->gauss_mean, p->gauss_mean/4);
+        spot[0] = next_car_time + 
+          generate_stay_time(p->gauss_mean, p->gauss_mean/4);
       }
     }
 
-
+    //Lock is only released when thread is guaranteed to have the next spot
     for (int j = 1; j < p->TOTAL_SPOTS; j++){  
-      //A lock is only released when a thread is guarateed to have the next spot too
       pthread_mutex_lock(&lock[j]);
       pthread_mutex_unlock(&lock[j-1]);
       if (spot[j] < next_car_time){ //If the spot is available
         local_open_spots++;
         if( parked == 0 ){ 
           parked = 1;
-          spot[j] = next_car_time + generate_stay_time(p->gauss_mean, p->gauss_mean/4);
+          spot[j] = next_car_time + 
+            generate_stay_time(p->gauss_mean, p->gauss_mean/4);
         }
       }
     }
     pthread_mutex_unlock(&lock[p->TOTAL_SPOTS -1]);
 
-    // If you still haven't parked after checking each spot, aka parked == 0 
+    // If you still haven't parked after checking each spot
     if(parked == 0)
       local_missed_cars++;
     
@@ -156,38 +172,33 @@ void thread_main(void* param){
 
       pthread_barrier_wait(&barrier_b);
 
-      //check convergence
+      //Check Convergences
       double curr_open_spots_average = open_spots/iterations_executed;
       double curr_missed_cars_average = missed_cars/iterations_executed;
 
-     /*
       if(curr_open_spots_average - prev_open_spots_average < error_bound &&
         curr_missed_cars_average - prev_missed_cars_average < error_bound){
-          //Exit Thread
+          //Proceed to exit thread
         break;
       }
-*/
      
-      pthread_barrier_wait(&barrier_a);
     } //End of Convergence Conditional
 
     local_iterations++;
 
   } //End of Loop
 
+  //Increment one last time before exiting thread
+  //Incase total_iterations %1000000 != 0
+  increment_iterations(local_iterations);
+  increment_open_spots(local_open_spots);
+  increment_missed_cars(local_missed_cars);
+
   //Close all threads, but not the main thread
-  if(pthread_equal(pthread_self(), p->main_thread)){
-      increment_iterations(local_iterations);
-      increment_open_spots(local_open_spots);
-      increment_missed_cars(local_missed_cars);
-    return;
-	}
-  else{
-      increment_iterations(local_iterations);
-      increment_open_spots(local_open_spots);
-      increment_missed_cars(local_missed_cars);
-    pthread_exit(NULL);
-  }
+  if(pthread_equal(pthread_self(), p->main_thread))
+    return;	
+  else
+    pthread_exit(NULL); 
 }
 
 int main(int argc, char **argv){
@@ -195,13 +206,12 @@ int main(int argc, char **argv){
   clock_gettime(CLOCK_MONOTONIC, &begin);
   init_sequence(100); //Setting lag table
 
-
   if(argc != 4 && argc !=5){
-    printf("Please enter all your variables man!\n");
+    printf("Please enter all your variables!\n");
     pthread_exit(NULL);
   }
 
-  //Initializing params that all thread will execute upon
+  //Initializing parameters that all thread will execute upon
     struct thread_params params;
     params.TOTAL_SPOTS = atoi(argv[1]);
     if(params.TOTAL_SPOTS <= 0){
@@ -267,7 +277,6 @@ int main(int argc, char **argv){
         pthread_exit(NULL);
       }
     } 
-
 
   //Printing Results
   double missed_car_prob = (double)missed_cars / iterations_executed;
