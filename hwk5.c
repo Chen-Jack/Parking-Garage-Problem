@@ -24,7 +24,7 @@ void finalize ( char * state ){
 }
 
 //Global Variables
-int MAX_ITERATIONS = 100000000;
+int MAX_ITERATIONS = 1000000;
 double error_bound = 0.1;
 
 pthread_mutex_t iteration_lock;
@@ -98,10 +98,10 @@ double generate_stay_time(double gauss_mean, double std_dev){
 void thread_main(void* param){
   int local_missed_cars = 0;
   int local_open_spots = 0;
+  int local_iterations = 0;
   struct thread_params* p = (struct thread_params*)param; 
 
   for(int i=1; i <= p->total_iterations; i++){ 
-    // printf("%d\n",i);
     double next_car_time = 0; //The time of next arriving car
     int parked = 0; //Let 0 mean the car has not yet parked
 
@@ -116,10 +116,12 @@ void thread_main(void* param){
         spot[0] = next_car_time + generate_stay_time(p->gauss_mean, p->gauss_mean/4);
       }
     }
-    pthread_mutex_unlock(&lock[0]);
+
 
     for (int j = 1; j < p->TOTAL_SPOTS; j++){  
+      //A lock is only released when a thread is guarateed to have the next spot too
       pthread_mutex_lock(&lock[j]);
+      pthread_mutex_unlock(&lock[j-1]);
       if (spot[j] < next_car_time){ //If the spot is available
         local_open_spots++;
         if( parked == 0 ){ 
@@ -127,12 +129,13 @@ void thread_main(void* param){
           spot[j] = next_car_time + generate_stay_time(p->gauss_mean, p->gauss_mean/4);
         }
       }
-      pthread_mutex_unlock(&lock[j]);
     }
+    pthread_mutex_unlock(&lock[p->TOTAL_SPOTS -1]);
+
     // If you still haven't parked after checking each spot, aka parked == 0 
     if(parked == 0)
       local_missed_cars++;
-
+    
     //Check convergence every 1 million iterations
     if(i % 1000000 == 0){
       double prev_open_spots_average = 0;
@@ -144,9 +147,12 @@ void thread_main(void* param){
 
       pthread_barrier_wait(&barrier_a);
 
-      increment_iterations(p->total_iterations);
+      increment_iterations(local_iterations);
       increment_open_spots(local_open_spots);
       increment_missed_cars(local_missed_cars);
+      local_iterations = 0;
+      local_open_spots = 0;
+      local_missed_cars = 0;
 
       pthread_barrier_wait(&barrier_b);
 
@@ -154,20 +160,34 @@ void thread_main(void* param){
       double curr_open_spots_average = open_spots/iterations_executed;
       double curr_missed_cars_average = missed_cars/iterations_executed;
 
+     /*
       if(curr_open_spots_average - prev_open_spots_average < error_bound &&
         curr_missed_cars_average - prev_missed_cars_average < error_bound){
-          //Terminate program
+          //Exit Thread
         break;
       }
-
+*/
+     
+      pthread_barrier_wait(&barrier_a);
     } //End of Convergence Conditional
+
+    local_iterations++;
+
   } //End of Loop
 
   //Close all threads, but not the main thread
-  if(pthread_equal(pthread_self(), p->main_thread))
+  if(pthread_equal(pthread_self(), p->main_thread)){
+      increment_iterations(local_iterations);
+      increment_open_spots(local_open_spots);
+      increment_missed_cars(local_missed_cars);
     return;
-  else
+	}
+  else{
+      increment_iterations(local_iterations);
+      increment_open_spots(local_open_spots);
+      increment_missed_cars(local_missed_cars);
     pthread_exit(NULL);
+  }
 }
 
 int main(int argc, char **argv){
@@ -184,12 +204,8 @@ int main(int argc, char **argv){
   //Initializing params that all thread will execute upon
     struct thread_params params;
     params.TOTAL_SPOTS = atoi(argv[1]);
-    if(params.TOTAL_SPOTS == 0){
+    if(params.TOTAL_SPOTS <= 0){
       printf("Please enter a valid parking spot amount.\n");
-      pthread_exit(NULL);
-    }
-    if(params.TOTAL_SPOTS < 0){
-      printf("Please enter a non-negative amount of spots.\n");
       pthread_exit(NULL);
     }
     if(argc == 4)
