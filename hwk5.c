@@ -140,6 +140,7 @@ void thread_main(void* param){
       if(iterations_executed != 0){
         prev_open_spots_average = open_spots/iterations_executed;
         prev_missed_cars_average = missed_cars/iterations_executed;
+      }
 
       pthread_barrier_wait(&barrier_a);
 
@@ -243,7 +244,7 @@ int main(int argc, char **argv){
   thread_main((void*)&params);
 
   //Wait for all threads
-    for (int i = 0; i < params.TOTAL_THREADS; i++){
+    for (int i = 0; i < params.TOTAL_THREADS-1; i++){
       int ret = pthread_join(thread[i], NULL);
       if(ret != 0){
         printf("%d : Error on Join. Exiting Program. %d\n",i ,ret);
