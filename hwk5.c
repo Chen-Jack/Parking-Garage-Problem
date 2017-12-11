@@ -39,11 +39,11 @@ char * init_sequence ( int state_size ){
 }
 
 //Global Variables
-int MAX_ITERATIONS = 1000000;
+int MAX_ITERATIONS = 100000000;
 double error_bound = 0.001;
 
 int iterations_executed = 0; //Actual number of iterations performed
-pthread_mutex_t iterations_lock; //Mutex to change iterations_executed
+pthread_mutex_t iteration_lock; //Mutex to change iterations_executed
 
 pthread_t* thread; //An array of thread ids
 double *spot; //An array of all spots
